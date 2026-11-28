@@ -1,5 +1,5 @@
 /* Mis Gastos V2 · service worker: solo caché de la propia app (nunca datos financieros, que viven cifrados en localStorage/IndexedDB). */
-const VERSION = 'mis-gastos-v2.1.0';
+const VERSION = 'mis-gastos-v2.2.0';
 const ASSETS = ['./', './index.html', './manifest.json', './icon.png'];
 
 self.addEventListener('install', e => {

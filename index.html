@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-sc3YybhyVGIVqz6T4ds6QfTO2QqgRkHOs44ZLlxsCJs=' 'sha256-9nWYuJqSh2rw60R3nZ7WN+5F53n9i3pgVRuQSq03uZI=' 'sha256-Ha/fZOmen4MfLXYDbhrwEuwSdMQeD3o1DRKQB7rK2KM=' 'sha256-BZlY7NWd8js+Ph/fcQFLtKCMPRqpq3JfNpgZ1NEwxxo='; style-src 'self' 'sha256-xL4rLNZOhrlcxU61VgnxKrCS4l1/q9nmpsL6JayyCZw='; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; media-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-sc3YybhyVGIVqz6T4ds6QfTO2QqgRkHOs44ZLlxsCJs=' 'sha256-oWT4Q2hkylGzXqlWVWNXpzJPwZJlMrD3OeRNtjggLn8=' 'sha256-Ha/fZOmen4MfLXYDbhrwEuwSdMQeD3o1DRKQB7rK2KM=' 'sha256-u8vVtAM+X//IeaGCQo0JOfcAeSK2M0UH6fw7BcSLnkw='; style-src 'self' 'sha256-xL4rLNZOhrlcxU61VgnxKrCS4l1/q9nmpsL6JayyCZw='; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; media-src 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#0b1220">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -206,6 +206,10 @@ body:not(.locked) #gate{display:none}
     <div class="row2"><button class="btn" id="backupBtn" type="button">Crear backup cifrado</button><button class="btn" id="restoreBtn" type="button">Restaurar backup</button></div>
     <input id="restoreFile" type="file" accept=".json,application/json" class="hidden">
     <div class="row2"><button class="btn" id="exportCsv" type="button">Exportar movimientos CSV</button><button class="btn" id="exportSummary" type="button">Resumen del ciclo (JSON)</button></div>
+    <h3>Configuración</h3>
+    <p class="small muted">Importa un archivo de configuración (compromisos, reglas, reservas y presupuestos). Solo añade o actualiza esos apartados: no toca movimientos ni saldo.</p>
+    <button class="btn wide" id="importConfig" type="button">Importar configuración</button>
+    <input id="configFile" type="file" accept=".json,application/json" class="hidden">
     <h3>Extractos originales guardados</h3>
     <div id="originals" class="small"></div>
     <h3>Ajustes</h3>
@@ -768,19 +772,56 @@ if(typeof module!=='undefined'&&module.exports)module.exports=globalThis.MisGast
   function commitmentStatus(commitments, movements, cycles, cycle, today) {
     if (!cycle) return [];
     const inCycle = movements.filter(m => cycleKeyOf(m, cycles) === cycle.key && Number(m.amount) < 0);
-    return (commitments || []).filter(c => c && c.active !== false).map(c => {
-      const due = commitmentDueDate(c, cycle);
-      if (!due) return null;
-      const amount = Math.abs(Number(c.amount) || 0);
-      let paidBy = null;
-      if ((c.paidCycles || []).includes(cycle.key)) paidBy = 'manual';
-      else if (c.match && normText(c.match)) {
-        const needle = normText(c.match);
-        const hit = inCycle.find(m => normText(m.description).includes(needle) && Math.abs(Math.abs(m.amount) - amount) <= Math.max(1, amount * 0.15));
-        if (hit) paidBy = hit.id || 'movement';
-      }
-      return { id: c.id, name: c.name, amount: round2(amount), due, paid: !!paidBy, paidBy, overdue: !paidBy && due < today, reserveId: c.reserveId || null };
-    }).filter(Boolean).sort((a, b) => a.due.localeCompare(b.due));
+    const active = (commitments || []).filter(c => c && c.active !== false).map(c => ({ c, due: commitmentDueDate(c, cycle), amount: round2(Math.abs(Number(c.amount) || 0)) })).filter(x => x.due);
+    // Emparejamiento único: cada cargo del extracto solo puede pagar un compromiso; gana el importe más cercano.
+    const cands = [];
+    active.forEach((x, i) => {
+      const needle = normText(x.c.match || '');
+      if (!needle || (x.c.paidCycles || []).includes(cycle.key)) return;
+      inCycle.forEach((m, j) => {
+        if (!normText(m.description).includes(needle)) return;
+        const diff = Math.abs(Math.abs(m.amount) - x.amount);
+        if (diff <= Math.max(1, x.amount * 0.05)) cands.push({ i, j, diff });
+      });
+    });
+    cands.sort((a, b) => a.diff - b.diff);
+    const paidBy = new Map(), usedMov = new Set();
+    for (const k of cands) { if (paidBy.has(k.i) || usedMov.has(k.j)) continue; paidBy.set(k.i, inCycle[k.j].id || 'movement'); usedMov.add(k.j); }
+    return active.map((x, i) => {
+      const manual = (x.c.paidCycles || []).includes(cycle.key);
+      const by = manual ? 'manual' : (paidBy.get(i) || null);
+      return { id: x.c.id, name: x.c.name, amount: x.amount, due: x.due, paid: !!by, paidBy: by, overdue: !by && x.due < today, reserveId: x.c.reserveId || null };
+    }).sort((a, b) => a.due.localeCompare(b.due));
+  }
+
+  /* ---------------- configuración importable ---------------- */
+  // Fusiona un archivo de configuración: añade/sustituye por nombre (compromisos, reservas) o por texto (reglas).
+  // Nunca toca movimientos, saldo ni importaciones.
+  function mergeConfig(data, cfg) {
+    if (!cfg || cfg.type !== 'mis-gastos-config' || cfg.version !== 1) throw Error('No es un archivo de configuración de Mis Gastos.');
+    const d = normalizeData(JSON.parse(JSON.stringify(data)));
+    const summary = { commitmentsAdded: 0, commitmentsReplaced: 0, rulesAdded: 0, rulesReplaced: 0, reservesAdded: 0, reservesKept: 0, budgets: 0, settings: [] };
+    const byName = (arr, name) => arr.findIndex(x => normText(x.name) === normText(name));
+    for (const c of (cfg.commitments || []).slice(0, 200)) {
+      if (!c || typeof c.name !== 'string') continue;
+      const i = byName(d.commitments, c.name);
+      const rec = { ...c, id: i >= 0 ? d.commitments[i].id : uid(), paidCycles: i >= 0 ? d.commitments[i].paidCycles : [] };
+      if (i >= 0) { d.commitments[i] = rec; summary.commitmentsReplaced++; } else { d.commitments.push(rec); summary.commitmentsAdded++; }
+    }
+    for (const r of (cfg.reserves || []).slice(0, 100)) {
+      if (!r || typeof r.name !== 'string') continue;
+      if (byName(d.reserves, r.name) >= 0) { summary.reservesKept++; continue; }   // no pisar dinero apartado
+      d.reserves.push({ ...r, id: uid() }); summary.reservesAdded++;
+    }
+    for (const r of (cfg.rules || []).slice(0, 1000)) {
+      if (!r || typeof r.match !== 'string' || !CATEGORIES.includes(r.category)) continue;
+      const m = normText(r.match); const i = d.categoryRules.findIndex(x => x.match === m);
+      const rec = { ...r, match: m, id: i >= 0 ? d.categoryRules[i].id : uid() };
+      if (i >= 0) { d.categoryRules[i] = rec; summary.rulesReplaced++; } else { d.categoryRules.push(rec); summary.rulesAdded++; }
+    }
+    if (cfg.budgets && typeof cfg.budgets === 'object') for (const [k, v] of Object.entries(cfg.budgets)) if (CATEGORIES.includes(k) && Number(v) >= 0) { d.budgets[k] = Number(v); summary.budgets++; }
+    if (cfg.settings && typeof cfg.settings === 'object') for (const k of ['payrollPattern', 'payrollMinAmount', 'payrollWindowStartDay']) if (k in cfg.settings) { d.settings[k] = cfg.settings[k]; summary.settings.push(k); }
+    return { data: normalizeData(d), summary };
   }
 
   /* ---------------- dinero disponible ---------------- */
@@ -1130,7 +1171,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=globalThis.MisGast
     fingerprint, classifyDuplicates, classify, sortedRules,
     computeCycles, cycleForDate, cycleKeyOf, currentCycle, cycleProgress, cycleLabelForPayroll,
     summarize, budgetStatus, commitmentStatus, commitmentDueDate, availableMoney,
-    emptyData, normalizeData, parseCSV, exportCSV, csvCell, advisorReport, merchantKey, minBalanceInCycle
+    emptyData, normalizeData, parseCSV, exportCSV, csvCell, advisorReport, merchantKey, minBalanceInCycle, mergeConfig
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.MGCore;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
@@ -1462,7 +1503,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=globalThis.MisGast
 <script>/* Mis Gastos V2 · interfaz. Local-first: sin red, sin telemetría. */
 (function () {
   'use strict';
-  const APP_VERSION = '2.1.0';
+  const APP_VERSION = '2.2.0';
   const C = window.MGCore, S = window.MGSheets, X = window.MisGastosEncryptedBackup;
   const LEGACY_KEY = 'misgastos_rebuild_v1';           // datos V1 sin cifrar (solo migración)
   const STORE_KEY = LEGACY_KEY + '_encrypted';         // mismo contenedor que V1: la V2 abre los datos existentes
@@ -2151,6 +2192,31 @@ if(typeof module!=='undefined'&&module.exports)module.exports=globalThis.MisGast
     commit(d => { d.profile = { risk: $('pfRisk').value, dependents: $('pfDep').value, emergencyMonths: Number($('pfEm').value) || 0, investMonthly: inv, investNote: $('pfInvNote').value, notes: $('pfNotes').value }; }, 'Perfil guardado.');
   }
 
+  async function importConfig(file) {
+    try {
+      if (file.size > 1024 * 1024) throw Error('Archivo demasiado grande.');
+      let cfg; try { cfg = JSON.parse(await file.text()); } catch (e) { throw Error('No es un JSON válido.'); }
+      const { data: next, summary: s } = C.mergeConfig(committed, cfg);
+      const li = (t, n) => n ? `<li>${t}: <b>${n}</b></li>` : '';
+      const body = `${cfg.note ? `<p class="small muted">${esc(String(cfg.note).slice(0, 300))}</p>` : ''}
+        <ul class="small">${li('Compromisos nuevos', s.commitmentsAdded)}${li('Compromisos actualizados (mismo nombre)', s.commitmentsReplaced)}
+        ${li('Reglas nuevas', s.rulesAdded)}${li('Reglas actualizadas', s.rulesReplaced)}${li('Reservas nuevas (0 € apartados)', s.reservesAdded)}
+        ${li('Reservas que ya existían y no se tocan', s.reservesKept)}${li('Presupuestos', s.budgets)}${s.settings.length ? `<li>Ajustes de nómina actualizados</li>` : ''}</ul>
+        <p class="small">No se modifican movimientos, saldo ni importaciones.</p>
+        <label class="check"><input type="checkbox" id="cfgReapply" checked> Reaplicar reglas a los movimientos no editados a mano</label>`;
+      openModal('Importar configuración', body, [
+        { label: 'Cancelar', action: closeModal },
+        { label: 'Aplicar', primary: true, action: async () => {
+          const reapply = $('cfgReapply').checked;
+          const ok = await commit(d => {
+            Object.keys(d).forEach(k => delete d[k]); Object.assign(d, clone(next));
+            if (reapply) d.movements.forEach(m => { if (m.categoryManual) return; const c = C.classify(m, d.categoryRules, d.settings); m.category = c.category; m.kind = c.kind; m.incomeType = c.incomeType; });
+          }, 'Configuración aplicada.');
+          if (ok) { closeModal(); budgetEditing = false; delete $('budgetEditor').dataset.ready; $('settingsForm').dataset.ready = ''; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+        } }]);
+    } catch (e) { alert('No se pudo importar la configuración: ' + e.message); }
+  }
+
   function exportAdvisorReport() {
     try {
       const md = C.advisorReport(committed, today(), { merchants: $('reportMerchants').checked });
@@ -2258,6 +2324,8 @@ if(typeof module!=='undefined'&&module.exports)module.exports=globalThis.MisGast
     $('exportSummary').addEventListener('click', exportSummary);
     $('saveSettings').addEventListener('click', saveSettings);
     $('saveProfile').addEventListener('click', saveProfile);
+    $('importConfig').addEventListener('click', () => { $('configFile').value = ''; $('configFile').click(); });
+    $('configFile').addEventListener('change', e => { const f = e.target.files[0]; if (f) importConfig(f); e.target.value = ''; });
     $('advisorReport').addEventListener('click', exportAdvisorReport);
     $('changePassword').addEventListener('click', changePassword);
     $('requestPersist').addEventListener('click', () => { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().then(renderSecurity); else renderSecurity(); });
