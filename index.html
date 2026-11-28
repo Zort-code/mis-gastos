@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-sc3YybhyVGIVqz6T4ds6QfTO2QqgRkHOs44ZLlxsCJs=' 'sha256-CCZXi639rV/Agqk2gdqDvpf4B1OvAXU5V5VBcJmj4Dw=' 'sha256-Ha/fZOmen4MfLXYDbhrwEuwSdMQeD3o1DRKQB7rK2KM=' 'sha256-4x4uIavxCc1Q2ILR/G+otXSwt7PqQHN0Wb4YkQFqVEk='; style-src 'self' 'sha256-xL4rLNZOhrlcxU61VgnxKrCS4l1/q9nmpsL6JayyCZw='; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; media-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-sc3YybhyVGIVqz6T4ds6QfTO2QqgRkHOs44ZLlxsCJs=' 'sha256-9nWYuJqSh2rw60R3nZ7WN+5F53n9i3pgVRuQSq03uZI=' 'sha256-Ha/fZOmen4MfLXYDbhrwEuwSdMQeD3o1DRKQB7rK2KM=' 'sha256-BZlY7NWd8js+Ph/fcQFLtKCMPRqpq3JfNpgZ1NEwxxo='; style-src 'self' 'sha256-xL4rLNZOhrlcxU61VgnxKrCS4l1/q9nmpsL6JayyCZw='; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; media-src 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#0b1220">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -189,6 +189,14 @@ body:not(.locked) #gate{display:none}
     <p class="small muted">Si el concepto contiene el texto, se aplica la regla. Gana la de mayor prioridad; a igual prioridad, el texto más largo. Tus reglas siempre ganan a las incorporadas.</p>
     <div class="row2"><button class="btn sm" id="addRule" type="button">+ Nueva regla</button><button class="btn sm" id="reapplyRules" type="button">Reaplicar reglas</button></div>
     <div id="rules"></div>
+  </details>
+
+  <details class="card" id="secAdvisor"><summary><h2>Mi perfil e informe para asesor</h2></summary>
+    <p class="small muted">Rellena tu perfil y genera un informe con tus ciclos, saldo mínimo antes de cada nómina, gastos recurrentes y gastos pequeños. Se crea en tu iPhone; tú decides con quién compartirlo.</p>
+    <div id="profileForm" class="settings"></div>
+    <button class="btn" id="saveProfile" type="button">Guardar perfil</button>
+    <label class="check"><input type="checkbox" id="reportMerchants" checked> Incluir nombres de comercios (más útil para el análisis)</label>
+    <button class="btn primary wide" id="advisorReport" type="button">Generar informe para asesor</button>
   </details>
 
   <details class="card" id="secData"><summary><h2>Datos, copias y seguridad</h2></summary>
@@ -832,7 +840,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=globalThis.MisGast
 
   function emptyData() {
     return { schema: 2, movements: [], goals: [], reserves: [], commitments: [], categoryRules: [],
-      budgets: {}, settings: { ...DEFAULT_SETTINGS }, imports: [] };
+      budgets: {}, settings: { ...DEFAULT_SETTINGS }, imports: [], profile: { risk: '', dependents: '', emergencyMonths: 0, investMonthly: 0, investNote: '', notes: '' } };
   }
 
   // Acepta datos V1 ({movements, goals, categoryRules, budgets}) y V2. Lanza Error si la estructura es inválida.
@@ -915,6 +923,13 @@ if(typeof module!=='undefined'&&module.exports)module.exports=globalThis.MisGast
     if (input.budgets && typeof input.budgets === 'object' && !Array.isArray(input.budgets)) {
       for (const [k, v] of Object.entries(input.budgets)) if (SAFE_KEY(k) && CATEGORIES.includes(k) && Number.isFinite(Number(v)) && Number(v) >= 0) out.budgets[k] = round2(v);
     }
+    if (input.profile && typeof input.profile === 'object' && !Array.isArray(input.profile)) {
+      const p = input.profile, str = (v, n) => typeof v === 'string' ? v.trim().slice(0, n) : '';
+      out.profile = { risk: ['baja', 'media', 'alta'].includes(p.risk) ? p.risk : '', dependents: str(p.dependents, 200),
+        emergencyMonths: Number.isFinite(+p.emergencyMonths) && +p.emergencyMonths > 0 ? Math.min(24, Math.round(+p.emergencyMonths)) : 0,
+        investMonthly: Number.isFinite(+p.investMonthly) && +p.investMonthly > 0 ? round2(+p.investMonthly) : 0,
+        investNote: str(p.investNote, 200), notes: str(p.notes, 1000) };
+    }
     if (Array.isArray(input.imports)) {
       out.imports = input.imports.filter(i => i && typeof i === 'object').slice(-200).map(i => ({
         id: String(i.id || uid()).slice(0, 80), at: String(i.at || '').slice(0, 40), fileName: String(i.fileName || '').slice(0, 200),
@@ -972,6 +987,142 @@ if(typeof module!=='undefined'&&module.exports)module.exports=globalThis.MisGast
     return '﻿' + [head, ...rows].map(r => r.map(csvCell).join(';')).join('\r\n');
   }
 
+
+  /* ---------------- informe para asesoramiento ---------------- */
+  const STRIP_PREFIX = /^(tj-|tj |compra tarj\.?|compra tarjeta|pago tarj\.?|recibo|rcbo\.?|trf\.?|transferencia|bizum (a|de)|adeudo|cargo)\s*/;
+  function merchantKey(desc) {
+    let t = normText(desc).split(' · ')[0];
+    for (let i = 0; i < 3; i++) t = t.replace(STRIP_PREFIX, '');
+    return t.replace(/\b\d[\d/.\-]*\b/g, '').replace(/[^a-z0-9 .&]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40) || '(sin concepto)';
+  }
+
+  function minBalanceInCycle(movements, cycle) {
+    const end = cycle.end || cycle.estimatedEnd;
+    const ms = movements.filter(m => typeof m.balanceAfter === 'number' && m.date >= cycle.start && m.date <= end);
+    if (!ms.length) return null;
+    let min = ms[0];
+    for (const m of ms) if (m.balanceAfter < min.balanceAfter) min = m;
+    const dayIdx = diffDays(cycle.start, min.date) + 1;
+    return { amount: min.balanceAfter, date: min.date, dayOfCycle: dayIdx };
+  }
+
+  function advisorReport(data, today, opts) {
+    const o = { merchants: true, ...(opts || {}) };
+    const d = normalizeData(data);
+    const s = d.settings, ms = d.movements;
+    const cycles = computeCycles(ms, s, today);
+    const cur = currentCycle(cycles, today);
+    const av = availableMoney(d, today);
+    const closed = cycles.filter(c => c.end && c.end < today).slice(-6);
+    const recent = closed.slice(-3);
+    const eur = n => (Math.round(n * 100) / 100).toFixed(2).replace('.', ',') + ' €';
+    const L = [];
+    const dates = ms.map(m => m.date).sort();
+    L.push('# Informe Mis Gastos para asesoramiento');
+    L.push('');
+    L.push(`Generado: ${today}. Datos: ${ms.length} movimientos${dates.length ? ` del ${dates[0]} al ${dates[dates.length - 1]}` : ''}. Ciclos cerrados: ${closed.length}. Modo de ciclo: ${s.cycleMode === 'payroll' ? 'nómina' : 'mes natural'}.`);
+    L.push('');
+    L.push('> Generado localmente por la app. Contiene datos financieros personales: compártelo solo con quien quieras.');
+    L.push('');
+    const p = d.profile || {};
+    L.push('## Perfil');
+    L.push(`- Tolerancia al riesgo: ${p.risk || 'sin indicar'}`);
+    L.push(`- Personas a cargo: ${p.dependents || 'sin indicar'}`);
+    L.push(`- Objetivo de fondo de emergencia: ${p.emergencyMonths ? p.emergencyMonths + ' meses de gasto' : 'sin indicar'}`);
+    L.push(`- Inversión mensual prevista: ${p.investMonthly ? eur(p.investMonthly) : 'sin indicar'}${p.investNote ? ' (' + p.investNote + ')' : ''}`);
+    if (p.notes) L.push(`- Notas: ${p.notes}`);
+    L.push('');
+    L.push('## Situación actual');
+    if (av.ok) {
+      for (const l of av.lines) L.push(`- ${l.label}: ${eur(l.amount)}`);
+      L.push(`- **Disponible real: ${eur(av.available)}**${av.perDay !== null ? ` (≈ ${eur(av.perDay)}/día hasta ${av.progress.end})` : ''}`);
+    } else L.push('- Saldo confirmado: PENDIENTE');
+    if (cur) L.push(`- Ciclo actual: ${cur.key} desde ${cur.start} (${cur.source === 'payroll' ? 'nómina detectada' : 'inicio estimado'})`);
+    L.push('');
+    L.push('## Ciclos (ingresos, gastos y saldo mínimo)');
+    const rows = cycles.slice(-7);
+    if (rows.length) {
+      L.push('| Ciclo | Inicio | Fin | Nómina | Extra | Otros ingr. | Gastos | Transf. netas | Neto | Saldo mínimo (día del ciclo) |');
+      L.push('|---|---|---|---|---|---|---|---|---|---|');
+      for (const c of rows) {
+        const sm = summarize(ms, cycles, c.key); const mb = minBalanceInCycle(ms, c);
+        L.push(`| ${c.key} | ${c.start} | ${c.end || '(abierto)'} | ${eur(sm.incomeOrdinary)} | ${eur(sm.incomeExtra)} | ${eur(sm.incomeOther + sm.incomeAdvance)} | ${eur(sm.expenses)} | ${eur(sm.transfersIn - sm.transfersOut)} | ${eur(sm.net)} | ${mb ? `${eur(mb.amount)} el ${mb.date} (día ${mb.dayOfCycle})` : 's/d'} |`);
+      }
+    } else L.push('Sin ciclos todavía.');
+    L.push('');
+    const base = recent.length ? recent : (cur ? [cur] : []);
+    if (base.length) {
+      const n = base.length; const keys = new Set(base.map(c => c.key));
+      const sel = ms.filter(m => keys.has(cycleKeyOf(m, cycles)));
+      const cat = {}; let tot = 0;
+      for (const m of sel) if (m.kind === 'expense') { cat[m.category] = (cat[m.category] || 0) - m.amount; tot -= m.amount; }
+      L.push(`## Gasto medio por ciclo y categoría (${recent.length ? `últimos ${n} ciclos cerrados` : 'ciclo actual, incompleto'})`);
+      L.push('| Categoría | Media por ciclo | % |'); L.push('|---|---|---|');
+      for (const [k, v] of Object.entries(cat).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])) L.push(`| ${k} | ${eur(v / n)} | ${tot ? Math.round(v / tot * 100) : 0}% |`);
+      L.push(`| **Total** | **${eur(tot / n)}** | |`);
+      L.push('');
+      // Ritmo: proporción del gasto del ciclo hecha en los primeros 7 días y en la primera mitad
+      const pace = base.filter(c => c.end).map(c => {
+        const len = diffDays(c.start, c.end) + 1; const e = ms.filter(m => m.kind === 'expense' && cycleKeyOf(m, cycles) === c.key);
+        const total = e.reduce((a, m) => a - m.amount, 0) || 1;
+        const w1 = e.filter(m => diffDays(c.start, m.date) < 7).reduce((a, m) => a - m.amount, 0);
+        const h1 = e.filter(m => diffDays(c.start, m.date) < len / 2).reduce((a, m) => a - m.amount, 0);
+        return { key: c.key, w1: w1 / total, h1: h1 / total };
+      });
+      if (pace.length) {
+        L.push('## Ritmo de gasto dentro del ciclo');
+        for (const x of pace) L.push(`- ${x.key}: ${Math.round(x.w1 * 100)}% del gasto en los primeros 7 días; ${Math.round(x.h1 * 100)}% en la primera mitad.`);
+        L.push('');
+      }
+      const small = sel.filter(m => m.kind === 'expense' && m.amount < 0 && -m.amount < 10);
+      L.push('## Gastos pequeños (< 10 €)');
+      L.push(`- ${small.length} operaciones, ${eur(small.reduce((a, m) => a - m.amount, 0) / n)} de media por ciclo.`);
+      const cash = sel.filter(m => m.category === 'Efectivo');
+      if (cash.length) L.push(`- Efectivo retirado: ${eur(cash.reduce((a, m) => a - m.amount, 0) / n)} de media por ciclo (no se sabe en qué se gasta).`);
+      L.push('');
+      if (o.merchants) {
+        const byM = {};
+        for (const m of sel) if (m.kind === 'expense' && m.amount < 0) { const k = merchantKey(m.description); (byM[k] = byM[k] || { sum: 0, n: 0, cat: m.category }); byM[k].sum -= m.amount; byM[k].n++; }
+        L.push(`## Comercios con más gasto (${recent.length ? `últimos ${n} ciclos` : 'ciclo actual'})`);
+        L.push('| Comercio | Total | Nº | Categoría |'); L.push('|---|---|---|---|');
+        for (const [k, v] of Object.entries(byM).sort((a, b) => b[1].sum - a[1].sum).slice(0, 20)) L.push(`| ${k} | ${eur(v.sum)} | ${v.n} | ${v.cat} |`);
+        L.push('');
+      }
+    }
+    // Recurrentes: mismo comercio en >= 2 ciclos distintos con importe parecido
+    const groups = {};
+    for (const m of ms) if (m.amount < 0 && m.kind !== 'transfer') { const k = merchantKey(m.description); (groups[k] = groups[k] || []).push(m); }
+    const rec = [];
+    for (const [k, arr] of Object.entries(groups)) {
+      const cs = new Set(arr.map(m => cycleKeyOf(m, cycles)));
+      if (cs.size < 2) continue;
+      const amts = arr.map(m => -m.amount).sort((a, b) => a - b); const med = amts[Math.floor(amts.length / 2)];
+      if (amts.filter(a => Math.abs(a - med) <= Math.max(2, med * 0.2)).length < Math.min(2, cs.size)) continue;
+      rec.push({ k: o.merchants ? k : arr[0].category, med, cycles: cs.size, cat: arr[0].category });
+    }
+    if (rec.length) {
+      L.push('## Cargos recurrentes detectados');
+      L.push('| Concepto | Importe habitual | Ciclos en que aparece | Categoría |'); L.push('|---|---|---|---|');
+      for (const r of rec.sort((a, b) => b.med - a.med).slice(0, 30)) L.push(`| ${r.k} | ${eur(r.med)} | ${r.cycles} | ${r.cat} |`);
+      L.push('');
+    }
+    L.push('## Compromisos, reservas y presupuestos');
+    if (d.commitments.length) for (const c of d.commitments) L.push(`- Compromiso: ${c.name} · ${eur(c.amount)} · ${c.date ? 'único ' + c.date : 'mensual día ' + c.day}${c.active === false ? ' (inactivo)' : ''}`);
+    else L.push('- Sin compromisos registrados.');
+    if (d.reserves.length) for (const r of d.reserves) L.push(`- Reserva: ${r.name} · apartado ${eur(r.saved)}${r.target ? ' / objetivo ' + eur(r.target) : ''}${r.monthly ? ' · aportación prevista ' + eur(r.monthly) + '/mes' : ''}${r.inAccount === false ? ' · en otra cuenta' : ''}`);
+    else L.push('- Sin reservas registradas.');
+    const b = Object.entries(d.budgets);
+    if (b.length) for (const [k, v] of b) L.push(`- Presupuesto: ${k} · ${eur(v)}/ciclo`); else L.push('- Sin presupuestos.');
+    L.push('');
+    L.push('## Calidad de los datos');
+    const otros = ms.filter(m => m.kind === 'expense' && m.category === 'Otros');
+    L.push(`- Gastos sin categoría («Otros»): ${otros.length} de ${ms.filter(m => m.kind === 'expense').length}.`);
+    L.push(`- Ciclos con inicio estimado (sin nómina detectada): ${cycles.filter(c => c.source === 'fallback').length}.`);
+    L.push(`- Movimientos con saldo del banco (permiten ver el saldo mínimo): ${ms.filter(m => typeof m.balanceAfter === 'number').length}.`);
+    if (closed.length < 3) L.push('- AVISO: hay menos de 3 ciclos cerrados; importa al menos 3-6 meses de extractos para un análisis fiable.');
+    return L.join('\n') + '\n';
+  }
+
   root.MGCore = {
     CATEGORIES, KINDS, KIND_LABEL, INCOME_TYPES, INCOME_LABEL, DEFAULT_SETTINGS, BUILTIN_RULES,
     normText, round2, cents, addDays, diffDays, monthKeyAdd, monthLabel, todayISO, uid,
@@ -979,7 +1130,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=globalThis.MisGast
     fingerprint, classifyDuplicates, classify, sortedRules,
     computeCycles, cycleForDate, cycleKeyOf, currentCycle, cycleProgress, cycleLabelForPayroll,
     summarize, budgetStatus, commitmentStatus, commitmentDueDate, availableMoney,
-    emptyData, normalizeData, parseCSV, exportCSV, csvCell
+    emptyData, normalizeData, parseCSV, exportCSV, csvCell, advisorReport, merchantKey, minBalanceInCycle
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.MGCore;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
@@ -1311,7 +1462,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=globalThis.MisGast
 <script>/* Mis Gastos V2 · interfaz. Local-first: sin red, sin telemetría. */
 (function () {
   'use strict';
-  const APP_VERSION = '2.0.0';
+  const APP_VERSION = '2.1.0';
   const C = window.MGCore, S = window.MGSheets, X = window.MisGastosEncryptedBackup;
   const LEGACY_KEY = 'misgastos_rebuild_v1';           // datos V1 sin cifrar (solo migración)
   const STORE_KEY = LEGACY_KEY + '_encrypted';         // mismo contenedor que V1: la V2 abre los datos existentes
@@ -1859,6 +2010,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=globalThis.MisGast
     renderRules();
     renderImports();
     renderSettings();
+    renderProfile();
     renderMovements(cycles);
     $('headerCycle').textContent = cur ? `Ciclo actual: ${C.monthLabel(cur.key)}` : '';
     $('footer').textContent = `Mis Gastos ${APP_VERSION} · ${data.movements.length} movimientos · datos cifrados solo en este dispositivo`;
@@ -1979,6 +2131,34 @@ if(typeof module!=='undefined'&&module.exports)module.exports=globalThis.MisGast
     $('settingsForm').dataset.ready = '1';
   }
 
+  function renderProfile() {
+    const f = $('profileForm');
+    if (f.dataset.ready === '1' && document.activeElement && f.contains(document.activeElement)) return;
+    const p = data.profile || {};
+    f.innerHTML = `
+      <label>Tolerancia al riesgo<select id="pfRisk"><option value="">Sin indicar</option>${['baja', 'media', 'alta'].map(r => `<option value="${r}" ${p.risk === r ? 'selected' : ''}>${r[0].toUpperCase() + r.slice(1)}</option>`).join('')}</select></label>
+      <label>Personas a cargo<input id="pfDep" maxlength="200" value="${esc(p.dependents || '')}" placeholder="p. ej. 1 hija de 4 años"></label>
+      <div class="row2 tight"><label>Fondo de emergencia objetivo (meses de gasto)<input id="pfEm" type="number" min="0" max="24" value="${p.emergencyMonths || ''}" placeholder="p. ej. 3"></label>
+      <label>Inversión mensual prevista (€)<input id="pfInv" inputmode="decimal" value="${p.investMonthly ? esc(String(p.investMonthly).replace('.', ',')) : ''}" placeholder="p. ej. 100"></label></div>
+      <label>Para qué es esa inversión<input id="pfInvNote" maxlength="200" value="${esc(p.investNote || '')}" placeholder="p. ej. cuenta infantil de mi hija, largo plazo"></label>
+      <label>Notas (deudas, gastos previstos, objetivos…)<textarea id="pfNotes" maxlength="1000" rows="3">${esc(p.notes || '')}</textarea></label>`;
+    f.dataset.ready = '1';
+  }
+
+  function saveProfile() {
+    const inv = $('pfInv').value.trim() === '' ? 0 : C.parseAmount($('pfInv').value);
+    if (inv === null || inv < 0) { alert('Importe de inversión no válido.'); return; }
+    commit(d => { d.profile = { risk: $('pfRisk').value, dependents: $('pfDep').value, emergencyMonths: Number($('pfEm').value) || 0, investMonthly: inv, investNote: $('pfInvNote').value, notes: $('pfNotes').value }; }, 'Perfil guardado.');
+  }
+
+  function exportAdvisorReport() {
+    try {
+      const md = C.advisorReport(committed, today(), { merchants: $('reportMerchants').checked });
+      download(`mis-gastos-informe-asesor-${today()}.md`, md, 'text/markdown;charset=utf-8');
+      toast('Informe generado. Adjúntalo en tu conversación con Claude.');
+    } catch (e) { alert('No se pudo generar el informe: ' + e.message); }
+  }
+
   function saveSettings() {
     const pattern = $('stPattern').value.trim() || C.DEFAULT_SETTINGS.payrollPattern;
     try { new RegExp(pattern, 'i'); } catch (e) { alert('El patrón de nómina no es válido.'); return; }
@@ -2077,6 +2257,8 @@ if(typeof module!=='undefined'&&module.exports)module.exports=globalThis.MisGast
     $('exportCsv').addEventListener('click', () => download(`mis-gastos-movimientos-${today()}.csv`, C.exportCSV(data.movements, cyclesNow()), 'text/csv;charset=utf-8'));
     $('exportSummary').addEventListener('click', exportSummary);
     $('saveSettings').addEventListener('click', saveSettings);
+    $('saveProfile').addEventListener('click', saveProfile);
+    $('advisorReport').addEventListener('click', exportAdvisorReport);
     $('changePassword').addEventListener('click', changePassword);
     $('requestPersist').addEventListener('click', () => { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().then(renderSecurity); else renderSecurity(); });
     $('addMovement').addEventListener('click', () => openMovement(null));
